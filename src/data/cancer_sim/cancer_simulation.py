@@ -343,6 +343,11 @@ def simulate_factual(simulation_params, seq_length, assigned_actions=None):
                 break  # patient death
 
             # recovery threshold as defined by the previous stuff
+            cancer_volume[i, t] = np.clip(
+                cancer_volume[i, t],
+                0,
+                TUMOUR_DEATH_THRESHOLD,
+            )
             if recovery_rvs[i, t] < np.exp(-cancer_volume[i, t] * TUMOUR_CELL_DENSITY):
                 cancer_volume[i, t] = 0
                 b_recover = True
@@ -735,6 +740,12 @@ def simulate_counterfactuals_treatment_seq(simulation_params, seq_length, projec
                          beta_c * counterfactual_chemo_dosage[current_t] -
                          (alpha * counterfactual_radio_dosage[current_t] + beta * counterfactual_radio_dosage[current_t] ** 2) +
                          noise[current_t + 1])
+
+                    counterfactual_cancer_volume[current_t + 1] = np.clip(
+                        counterfactual_cancer_volume[current_t + 1],
+                        0,
+                        TUMOUR_DEATH_THRESHOLD,
+                    )
 
                 if (np.isnan(counterfactual_cancer_volume).any()):
                     continue

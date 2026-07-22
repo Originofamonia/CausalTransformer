@@ -42,12 +42,12 @@ def train_eval_factual(args: dict, train_f: Dataset, val_f: Dataset, orig_hparam
         # Passing encoder takes too much memory
         encoder_r_size = new_params.model.encoder.br_size if 'br_size' in new_params.model.encoder \
             else new_params.model.encoder.seq_hidden_units  # Using either br_size or Memory adapter
-        model = model_cls(new_params, encoder_r_size=encoder_r_size, **kwargs).double()
+        model = model_cls(new_params, encoder_r_size=encoder_r_size, **kwargs).float()
     else:
-        model = model_cls(new_params, **kwargs).double()
+        model = model_cls(new_params, **kwargs).float()
 
     train_loader = DataLoader(train_f, shuffle=True, batch_size=new_params.model[model_cls.model_type]['batch_size'],
-                              drop_last=True)
+                              drop_last=True, num_workers=4)
     trainer = Trainer(gpus=eval(str(new_params.exp.gpus))[:1],
                       logger=None,
                       max_epochs=new_params.exp.max_epochs,
@@ -156,10 +156,17 @@ class TimeVaryingCausalModel(LightningModule):
 
     def train_dataloader(self) -> DataLoader:
         sub_args = self.hparams.model[self.model_type]
-        return DataLoader(self.dataset_collection.train_f, shuffle=True, batch_size=sub_args['batch_size'], drop_last=True)
+        return DataLoader(
+            self.dataset_collection.train_f,
+            shuffle=True,
+            batch_size=sub_args['batch_size'],
+            drop_last=True,
+            num_workers=6,
+            persistent_workers=True,
+        )
 
     def val_dataloader(self) -> DataLoader:
-        return DataLoader(self.dataset_collection.val_f, batch_size=self.hparams.dataset.val_batch_size)
+        return DataLoader(self.dataset_collection.val_f, batch_size=self.hparams.dataset.val_batch_size, num_workers=4)
 
     def get_predictions(self, dataset: Dataset) -> np.array:
         raise NotImplementedError()
@@ -391,6 +398,10 @@ class BRCausalModel(TimeVaryingCausalModel):
         self.balancing = args.exp.balancing
         self.alpha = args.exp.alpha  # Used for gradient-reversal
         self.update_alpha = args.exp.update_alpha
+        self._uses_manual_optimization = not (
+            self.balancing == 'grad_reverse' and not args.exp.weights_ema
+        )
+        self.automatic_optimization = not self._uses_manual_optimization
 
     def configure_optimizers(self):
         if self.balancing == 'grad_reverse' and not self.hparams.exp.weights_ema:  # one optimizer
@@ -428,14 +439,6 @@ class BRCausalModel(TimeVaryingCausalModel):
 
             return [non_treatment_head_optimizer, treatment_head_optimizer]
 
-    def optimizer_step(self, epoch: int = None, batch_idx: int = None, optimizer=None, optimizer_idx: int = None, *args,
-                       **kwargs) -> None:
-        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, *args, **kwargs)
-        if self.hparams.exp.weights_ema and optimizer_idx == 0:
-            self.ema_non_treatment.update()
-        elif self.hparams.exp.weights_ema and optimizer_idx == 1:
-            self.ema_treatment.update()
-
     def _calculate_bce_weights(self) -> None:
         if self.hparams.dataset.treatment_mode == 'multiclass':
             current_treatments = self.dataset_collection.train_f.data['current_treatments']
@@ -455,58 +458,76 @@ class BRCausalModel(TimeVaryingCausalModel):
         if self.trainer.logger is not None:
             self.trainer.logger.filter_submodels = ['encoder', 'decoder']
 
-    def training_step(self, batch, batch_ind, optimizer_idx=0):
+    def _representation_loss(self, batch):
         for par in self.parameters():
             par.requires_grad = True
 
-        if optimizer_idx == 0:  # grad reversal or domain confusion representation update
-            if self.hparams.exp.weights_ema:
-                with self.ema_treatment.average_parameters():
-                    treatment_pred, outcome_pred, _ = self(batch)
-            else:
+        if self.hparams.exp.weights_ema:
+            with self.ema_treatment.average_parameters():
                 treatment_pred, outcome_pred, _ = self(batch)
+        else:
+            treatment_pred, outcome_pred, _ = self(batch)
 
-            mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduce=False)
-            if self.balancing == 'grad_reverse':
-                bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='predict')
-            elif self.balancing == 'domain_confusion':
-                bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='confuse')
-                bce_loss = self.br_treatment_outcome_head.alpha * bce_loss
-            else:
-                raise NotImplementedError()
+        mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduction='none')
+        if self.balancing == 'grad_reverse':
+            bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].type_as(treatment_pred), kind='predict')
+        elif self.balancing == 'domain_confusion':
+            bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].type_as(treatment_pred), kind='confuse')
+            bce_loss = self.br_treatment_outcome_head.alpha * bce_loss
+        else:
+            raise NotImplementedError()
 
-            # Masking for shorter sequences
-            # Attention! Averaging across all the active entries (= sequence masks) for full batch
-            bce_loss = (batch['active_entries'].squeeze(-1) * bce_loss).sum() / batch['active_entries'].sum()
-            mse_loss = (batch['active_entries'] * mse_loss).sum() / batch['active_entries'].sum()
+        # Masking for shorter sequences
+        # Attention! Averaging across all the active entries (= sequence masks) for full batch
+        bce_loss = (batch['active_entries'].squeeze(-1) * bce_loss).sum() / batch['active_entries'].sum()
+        mse_loss = (batch['active_entries'] * mse_loss).sum() / batch['active_entries'].sum()
+        loss = bce_loss + mse_loss
 
-            loss = bce_loss + mse_loss
+        self.log(f'{self.model_type}_train_loss', loss, on_epoch=True, on_step=False, sync_dist=True)
+        self.log(f'{self.model_type}_train_bce_loss', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
+        self.log(f'{self.model_type}_train_mse_loss', mse_loss, on_epoch=True, on_step=False, sync_dist=True)
+        self.log(f'{self.model_type}_alpha', self.br_treatment_outcome_head.alpha, on_epoch=True, on_step=False,
+                 sync_dist=True)
+        return loss
 
-            self.log(f'{self.model_type}_train_loss', loss, on_epoch=True, on_step=False, sync_dist=True)
-            self.log(f'{self.model_type}_train_bce_loss', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
-            self.log(f'{self.model_type}_train_mse_loss', mse_loss, on_epoch=True, on_step=False, sync_dist=True)
-            self.log(f'{self.model_type}_alpha', self.br_treatment_outcome_head.alpha, on_epoch=True, on_step=False,
-                     sync_dist=True)
-
-            return loss
-
-        elif optimizer_idx == 1:  # domain classifier update
-            if self.hparams.exp.weights_ema:
-                with self.ema_non_treatment.average_parameters():
-                    treatment_pred, _, _ = self(batch, detach_treatment=True)
-            else:
+    def _classifier_loss(self, batch):
+        if self.hparams.exp.weights_ema:
+            with self.ema_non_treatment.average_parameters():
                 treatment_pred, _, _ = self(batch, detach_treatment=True)
+        else:
+            treatment_pred, _, _ = self(batch, detach_treatment=True)
 
-            bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='predict')
-            if self.balancing == 'domain_confusion':
-                bce_loss = self.br_treatment_outcome_head.alpha * bce_loss
+        bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].type_as(treatment_pred), kind='predict')
+        if self.balancing == 'domain_confusion':
+            bce_loss = self.br_treatment_outcome_head.alpha * bce_loss
 
-            # Masking for shorter sequences
-            # Attention! Averaging across all the active entries (= sequence masks) for full batch
-            bce_loss = (batch['active_entries'].squeeze(-1) * bce_loss).sum() / batch['active_entries'].sum()
-            self.log(f'{self.model_type}_train_bce_loss_cl', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
+        # Masking for shorter sequences
+        # Attention! Averaging across all the active entries (= sequence masks) for full batch
+        bce_loss = (batch['active_entries'].squeeze(-1) * bce_loss).sum() / batch['active_entries'].sum()
+        self.log(f'{self.model_type}_train_bce_loss_cl', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
+        return bce_loss
 
-            return bce_loss
+    def training_step(self, batch, batch_ind):
+        if not self._uses_manual_optimization:
+            return self._representation_loss(batch)
+
+        non_treatment_optimizer, treatment_optimizer = self.optimizers()
+
+        non_treatment_optimizer.zero_grad()
+        representation_loss = self._representation_loss(batch)
+        self.manual_backward(representation_loss)
+        non_treatment_optimizer.step()
+        if self.hparams.exp.weights_ema:
+            self.ema_non_treatment.update()
+
+        treatment_optimizer.zero_grad()
+        classifier_loss = self._classifier_loss(batch)
+        self.manual_backward(classifier_loss)
+        treatment_optimizer.step()
+        if self.hparams.exp.weights_ema:
+            self.ema_treatment.update()
+
+        return representation_loss.detach()
 
     def test_step(self, batch, batch_ind, **kwargs):
         if self.hparams.exp.weights_ema:
@@ -517,11 +538,11 @@ class BRCausalModel(TimeVaryingCausalModel):
             treatment_pred, outcome_pred, _ = self(batch)
 
         if self.balancing == 'grad_reverse':
-            bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='predict')
+            bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].type_as(treatment_pred), kind='predict')
         elif self.balancing == 'domain_confusion':
-            bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='confuse')
+            bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].type_as(treatment_pred), kind='confuse')
 
-        mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduce=False)
+        mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduction='none')
 
         # Masking for shorter sequences
         # Attention! Averaging across all the active entries (= sequence masks) for full batch
@@ -529,7 +550,9 @@ class BRCausalModel(TimeVaryingCausalModel):
         mse_loss = (batch['active_entries'] * mse_loss).sum() / batch['active_entries'].sum()
         loss = bce_loss + mse_loss
 
-        subset_name = self.test_dataloader().dataset.subset_name
+        test_dataloaders = self.trainer.test_dataloaders
+        test_dataloader = test_dataloaders[0] if isinstance(test_dataloaders, (list, tuple)) else test_dataloaders
+        subset_name = getattr(test_dataloader.dataset, 'subset_name', 'test')
         self.log(f'{self.model_type}_{subset_name}_loss', loss, on_epoch=True, on_step=False, sync_dist=True)
         self.log(f'{self.model_type}_{subset_name}_bce_loss', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
         self.log(f'{self.model_type}_{subset_name}_mse_loss', mse_loss, on_epoch=True, on_step=False, sync_dist=True)
@@ -548,13 +571,13 @@ class BRCausalModel(TimeVaryingCausalModel):
     def get_representations(self, dataset: Dataset) -> np.array:
         logger.info(f'Balanced representations inference for {dataset.subset_name}.')
         # Creating Dataloader
-        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False)
+        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=4)
         _, br = [torch.cat(arrs) for arrs in zip(*self.trainer.predict(self, data_loader))]
         return br.numpy()
 
     def get_predictions(self, dataset: Dataset) -> np.array:
         logger.info(f'Predictions for {dataset.subset_name}.')
         # Creating Dataloader
-        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False)
+        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=4)
         outcome_pred, _ = [torch.cat(arrs) for arrs in zip(*self.trainer.predict(self, data_loader))]
         return outcome_pred.numpy()

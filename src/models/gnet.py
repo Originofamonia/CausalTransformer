@@ -155,9 +155,10 @@ class GNet(TimeVaryingCausalModel):
         outcome_pred = outcome_next_vitals_pred[:, :, :self.dim_outcome]
         next_vitals_pred = outcome_next_vitals_pred[:, :, self.dim_outcome:]
 
-        outcome_mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduce=False)
+        outcome_mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduction='none')
         # batch['next_vitals'] is shorter by one timestep
-        vitals_mse_loss = F.mse_loss(next_vitals_pred[:, :-1, :], batch['next_vitals'], reduce=False) if self.has_vitals else 0.0
+        vitals_mse_loss = F.mse_loss(next_vitals_pred[:, :-1, :], batch['next_vitals'],
+                                     reduction='none') if self.has_vitals else 0.0
 
         # Masking for shorter sequences
         # Attention! Averaging across all the active entries (= sequence masks) for full batch
@@ -207,9 +208,9 @@ class GNet(TimeVaryingCausalModel):
         # Creating Dataloader
         if isinstance(dataset, list):
             data_loader = \
-                [DataLoader(d, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=2) for d in dataset]
+                [DataLoader(d, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=4) for d in dataset]
         else:
-            data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False)
+            data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=4)
 
         outcome_vitals_pred = self.trainer.predict(self, data_loader)
 

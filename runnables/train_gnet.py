@@ -12,7 +12,7 @@ from src.models.utils import AlphaRise, FilteringMlFlowLogger
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-torch.set_default_dtype(torch.double)
+torch.set_default_dtype(torch.float32)
 
 
 @hydra.main(config_name=f'config.yaml', config_path='../config/')
@@ -121,4 +121,3 @@ def main(args: DictConfig):
 
 if __name__ == "__main__":
     main()
-

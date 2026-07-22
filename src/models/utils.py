@@ -36,15 +36,21 @@ class FilteringMlFlowLogger(MLFlowLogger):
     @rank_zero_only
     def log_hyperparams(self, params) -> None:
         params = deepcopy(params)
-        [params.model.pop(filter_submodel) for filter_submodel in self.filter_submodels if filter_submodel in params.model]
+        model_params = params.get('model') if isinstance(params, dict) else params.model
+        if model_params is not None:
+            for filter_submodel in self.filter_submodels:
+                if filter_submodel in model_params:
+                    model_params.pop(filter_submodel)
         super().log_hyperparams(params)
 
 
 def bce(treatment_pred, current_treatments, mode, weights=None):
     if mode == 'multiclass':
-        return F.cross_entropy(treatment_pred.permute(0, 2, 1), current_treatments.permute(0, 2, 1), reduce=False, weight=weights)
+        return F.cross_entropy(treatment_pred.permute(0, 2, 1), current_treatments.permute(0, 2, 1),
+                               reduction='none', weight=weights)
     elif mode == 'multilabel':
-        return F.binary_cross_entropy_with_logits(treatment_pred, current_treatments, reduce=False, weight=weights).mean(dim=-1)
+        return F.binary_cross_entropy_with_logits(treatment_pred, current_treatments,
+                                                  reduction='none', weight=weights).mean(dim=-1)
     else:
         raise NotImplementedError()
 

@@ -34,3 +34,9 @@ defaults:
   - _self_
   - override hydra/hydra_logging: colorlog
   - override hydra/job_logging: colorlog
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job:
+    chdir: true

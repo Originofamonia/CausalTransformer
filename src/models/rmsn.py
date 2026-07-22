@@ -92,7 +92,7 @@ class RMSN(TimeVaryingCausalModel):
     def get_propensity_scores(self, dataset: Dataset) -> np.array:
         logger.info(f'Propensity scores for {dataset.subset_name}.')
         if self.model_type == 'propensity_treatment' or self.model_type == 'propensity_history':
-            data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False)
+            data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=4)
             propensity_scores = torch.cat(self.trainer.predict(self, data_loader))
         else:
             raise NotImplementedError()
@@ -135,7 +135,7 @@ class RMSNPropensityNetworkTreatment(RMSN):
 
     def training_step(self, batch, batch_ind):
         treatment_pred = self(batch)
-        bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='predict')
+        bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].type_as(treatment_pred), kind='predict')
         bce_loss = (batch['active_entries'].squeeze(-1) * bce_loss).sum() / batch['active_entries'].sum()
         self.log(f'{self.model_type}_bce_loss', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
         return bce_loss
@@ -190,7 +190,7 @@ class RMSNPropensityNetworkHistory(RMSN):
 
     def training_step(self, batch, batch_ind):
         treatment_pred = self(batch)
-        bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='predict')
+        bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].type_as(treatment_pred), kind='predict')
         bce_loss = (batch['active_entries'].squeeze(-1) * bce_loss).sum() / batch['active_entries'].sum()
         self.log(f'{self.model_type}_bce_loss', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
         return bce_loss
@@ -257,7 +257,7 @@ class RMSNEncoder(RMSN):
 
     def training_step(self, batch, batch_ind):
         outcome_pred, _ = self(batch)
-        mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduce=False)
+        mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduction='none')
         weighted_mse_loss = mse_loss * batch['sw_tilde_enc'].unsqueeze(-1)
         weighted_mse_loss = (batch['active_entries'] * weighted_mse_loss).sum() / batch['active_entries'].sum()
         self.log(f'{self.model_type}_mse_loss', weighted_mse_loss, on_epoch=True, on_step=False, sync_dist=True)
@@ -270,14 +270,14 @@ class RMSNEncoder(RMSN):
     def get_representations(self, dataset: Dataset) -> np.array:
         logger.info(f'Representations inference for {dataset.subset_name}.')
         # Creating Dataloader
-        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False)
+        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=4)
         _, r = [torch.cat(arrs) for arrs in zip(*self.trainer.predict(self, data_loader))]
         return r.numpy()
 
     def get_predictions(self, dataset: Dataset) -> np.array:
         logger.info(f'Predictions for {dataset.subset_name}.')
         # Creating Dataloader
-        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False)
+        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=4)
         outcome_pred, _ = [torch.cat(arrs) for arrs in zip(*self.trainer.predict(self, data_loader))]
         return outcome_pred.numpy()
 
@@ -337,7 +337,7 @@ class RMSNDecoder(RMSN):
 
     def training_step(self, batch, batch_ind):
         outcome_pred = self(batch)
-        mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduce=False)
+        mse_loss = F.mse_loss(outcome_pred, batch['outputs'], reduction='none')
         weighted_mse_loss = mse_loss * batch['sw_tilde_dec'].unsqueeze(-1)
         weighted_mse_loss = (batch['active_entries'] * weighted_mse_loss).sum() / batch['active_entries'].sum()
         self.log(f'{self.model_type}_mse_loss', weighted_mse_loss, on_epoch=True, on_step=False, sync_dist=True)
@@ -348,6 +348,6 @@ class RMSNDecoder(RMSN):
 
     def get_predictions(self, dataset: Dataset) -> np.array:
         logger.info(f'Predictions for {dataset.subset_name}.')
-        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False)
+        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False, num_workers=4)
         outcome_pred = torch.cat(self.trainer.predict(self, data_loader))
         return outcome_pred.numpy()

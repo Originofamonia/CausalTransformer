@@ -5,17 +5,17 @@ from omegaconf import DictConfig, OmegaConf
 from hydra.utils import instantiate
 from torch.utils.data import DataLoader
 from pytorch_lightning import Trainer
-from pytorch_lightning.utilities.seed import seed_everything
+from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor
 
 from src.models.utils import AlphaRise, FilteringMlFlowLogger
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-torch.set_default_dtype(torch.double)
+torch.set_default_dtype(torch.float32)
 
 
-@hydra.main(config_name=f'config.yaml', config_path='../config/')
+@hydra.main(config_name=f'config.yaml', config_path='../config/', version_base='1.2')
 def main(args: DictConfig):
     """
     Training / evaluation script for CT (Causal Transformer)
@@ -58,15 +58,27 @@ def main(args: DictConfig):
     multimodel = instantiate(args.model.multi, args, dataset_collection, _recursive_=False)
     if args.model.multi.tune_hparams:
         multimodel.finetune(resources_per_trial=args.model.multi.resources_per_trial)
+    accelerator = "mps" if torch.backends.mps.is_available() else "cpu"
+    multimodel_trainer = Trainer(
+        accelerator=accelerator,
+        devices=1,
+        logger=mlf_logger,
+        max_epochs=args.exp.max_epochs,
+        callbacks=multimodel_callbacks,
+        gradient_clip_val=args.model.multi.max_grad_norm,
+    )
 
-    multimodel_trainer = Trainer(gpus=eval(str(args.exp.gpus)), logger=mlf_logger, max_epochs=args.exp.max_epochs,
-                                 callbacks=multimodel_callbacks, terminate_on_nan=True,
-                                 gradient_clip_val=args.model.multi.max_grad_norm)
     multimodel_trainer.fit(multimodel)
 
     # Validation factual rmse
-    val_dataloader = DataLoader(dataset_collection.val_f, batch_size=args.dataset.val_batch_size, shuffle=False)
-    multimodel_trainer.test(multimodel, test_dataloaders=val_dataloader)
+    val_dataloader = DataLoader(
+        dataset_collection.val_f,
+        batch_size=args.dataset.val_batch_size,
+        shuffle=False,
+        num_workers=6,
+        persistent_workers=True,
+    )
+    multimodel_trainer.test(multimodel, dataloaders=val_dataloader)
     # multimodel.visualize(dataset_collection.val_f, index=0, artifacts_path=artifacts_path)
     val_rmse_orig, val_rmse_all = multimodel.get_normalised_masked_rmse(dataset_collection.val_f)
     logger.info(f'Val normalised RMSE (all): {val_rmse_all}; Val normalised RMSE (orig): {val_rmse_orig}')
@@ -123,4 +135,3 @@ def main(args: DictConfig):
 
 if __name__ == "__main__":
     main()
-

@@ -86,7 +86,12 @@ class MIMIC3RealDataset(Dataset):
         self.norm_const = 1.0
 
     def __getitem__(self, index) -> dict:
-        result = {k: v[index] for k, v in self.data.items()}
+        result = {
+            k: v[index].astype(np.float32, copy=False)
+            if isinstance(v, np.ndarray) and np.issubdtype(v.dtype, np.floating)
+            else v[index]
+            for k, v in self.data.items()
+        }
         if hasattr(self, 'encoder_r'):
             if 'original_index' in self.data:
                 result.update({'encoder_r': self.encoder_r[int(result['original_index'])]})

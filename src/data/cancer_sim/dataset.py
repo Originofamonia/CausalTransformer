@@ -75,7 +75,13 @@ class SyntheticCancerDataset(Dataset):
         self.norm_const = TUMOUR_DEATH_THRESHOLD
 
     def __getitem__(self, index) -> dict:
-        result = {k: v[index] for k, v in self.data.items() if hasattr(v, '__len__') and len(v) == len(self)}
+        result = {
+            k: v[index].astype(np.float32, copy=False)
+            if isinstance(v, np.ndarray) and np.issubdtype(v.dtype, np.floating)
+            else v[index]
+            for k, v in self.data.items()
+            if hasattr(v, '__len__') and len(v) == len(self)
+        }
         if hasattr(self, 'encoder_r'):
             if 'original_index' in self.data:
                 result.update({'encoder_r': self.encoder_r[int(result['original_index'])]})

@@ -15,24 +15,34 @@ The project is built with following Python libraries:
 3. [MlFlow](https://mlflow.org/) - experiments tracking
 
 ### Installations
-First one needs to make the virtual environment and install all the requirements:
+Create a Python 3.12 virtual environment and install the requirements:
 ```console
-pip3 install virtualenv
-python3 -m virtualenv -p python3 --always-copy venv
-source venv/bin/activate
-pip3 install -r requirements.txt
+python3.12 -m venv venv312
+source venv312/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
 ## MlFlow Setup / Connection
-To start an experiments server, run: 
+Start a local MLflow server from the repository root in a separate terminal:
 
-`mlflow server --port=5000`
+```console
+source venv312/bin/activate
+mkdir -p experiments
+python -m mlflow server \
+  --host 127.0.0.1 \
+  --port 5000 \
+  --backend-store-uri "sqlite:///$PWD/mlflow.db" \
+  --artifacts-destination "file://$PWD/experiments"
+```
 
-To access MlFLow web UI with all the experiments, connect via ssh:
+This persists run metadata in `mlflow.db` and stores artifacts under
+`experiments/<experiment-id>/<run-id>/`. Open the MLflow UI at
+`http://127.0.0.1:5000`.
 
-`ssh -N -f -L localhost:5000:localhost:5000 <username>@<server-link>`
-
-Then, one can go to local browser http://localhost:5000.
+If port 5000 is unavailable, choose another port (for example, 5001) and pass
+the matching URI to training with
+`exp.mlflow_uri=http://127.0.0.1:5001`.
 
 ## Experiments
 
@@ -40,8 +50,20 @@ Main training script is universal for different models and datasets. For details
 
 Generic script with logging and fixed random seed is following (with `training-type` `enc_dec`, `gnet`, `rmsn` and `multi`):
 ```console
-PYTHONPATH=. CUDA_VISIBLE_DEVICES=<devices> 
-python3 runnables/train_<training-type>.py +dataset=<dataset> +backbone=<backbone> exp.seed=10 exp.logging=True
+PYTHONPATH=. python runnables/train_<training-type>.py \
+  +dataset=<dataset> +backbone=<backbone> \
+  exp.seed=10 exp.logging=True
+```
+
+For example, train the Causal Transformer on the synthetic cancer simulator:
+
+```console
+PYTHONPATH=. python runnables/train_multi.py \
+  '+dataset=cancer_sim' \
+  '+backbone=ct' \
+  "+backbone/ct_hparams/cancer_sim_domain_conf='1'" \
+  exp.seed=10 \
+  exp.logging=True
 ```
 
 ### Backbones (baselines)

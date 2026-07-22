@@ -13,7 +13,7 @@ from src.models.rmsn import RMSN
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-torch.set_default_dtype(torch.double)
+torch.set_default_dtype(torch.float32)
 
 
 @hydra.main(config_name=f'config.yaml', config_path='../config/')
@@ -142,8 +142,9 @@ def main(args: DictConfig):
     encoder_results = {}
 
     # Validation factual rmse
-    val_dataloader = DataLoader(dataset_collection.val_f, batch_size=args.dataset.val_batch_size, shuffle=False)
-    encoder_trainer.test(encoder, test_dataloaders=val_dataloader)
+    val_dataloader = DataLoader(dataset_collection.val_f, batch_size=args.dataset.val_batch_size, shuffle=False,
+                                num_workers=4)
+    encoder_trainer.test(encoder, dataloaders=val_dataloader)
     val_rmse_orig, val_rmse_all = encoder.get_normalised_masked_rmse(dataset_collection.val_f)
     logger.info(f'Val normalised RMSE (all): {val_rmse_all}; Val normalised RMSE (orig): {val_rmse_orig}')
 
@@ -190,8 +191,9 @@ def main(args: DictConfig):
         decoder_trainer.fit(decoder)
 
         # Validation factual rmse
-        val_dataloader = DataLoader(dataset_collection.val_f, batch_size=10 * args.dataset.val_batch_size, shuffle=False)
-        decoder_trainer.test(decoder, test_dataloaders=val_dataloader)
+        val_dataloader = DataLoader(dataset_collection.val_f, batch_size=10 * args.dataset.val_batch_size, shuffle=False,
+                                    num_workers=4)
+        decoder_trainer.test(decoder, dataloaders=val_dataloader)
         val_rmse_orig, val_rmse_all = decoder.get_normalised_masked_rmse(dataset_collection.val_f)
         logger.info(f'Val normalised RMSE (all): {val_rmse_all}; Val normalised RMSE (orig): {val_rmse_orig}')
 
@@ -219,4 +221,3 @@ def main(args: DictConfig):
 
 if __name__ == "__main__":
     main()
-
