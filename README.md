@@ -31,14 +31,14 @@ source venv312/bin/activate
 mkdir -p experiments
 python -m mlflow server \
   --host 127.0.0.1 \
-  --port 5000 \
+  --port 5001 \
   --backend-store-uri "sqlite:///$PWD/mlflow.db" \
   --artifacts-destination "file://$PWD/experiments"
 ```
 
 This persists run metadata in `mlflow.db` and stores artifacts under
 `experiments/<experiment-id>/<run-id>/`. Open the MLflow UI at
-`http://127.0.0.1:5000`.
+`http://127.0.0.1:5001`.
 
 If port 5000 is unavailable, choose another port (for example, 5001) and pass
 the matching URI to training with
@@ -52,7 +52,7 @@ Generic script with logging and fixed random seed is following (with `training-t
 ```console
 PYTHONPATH=. python runnables/train_<training-type>.py \
   +dataset=<dataset> +backbone=<backbone> \
-  exp.seed=10 exp.logging=True
+  exp.seed=8964 exp.logging=False
 ```
 
 For example, train the Causal Transformer on the synthetic cancer simulator:
@@ -62,8 +62,8 @@ PYTHONPATH=. python runnables/train_multi.py \
   '+dataset=cancer_sim' \
   '+backbone=ct' \
   "+backbone/ct_hparams/cancer_sim_domain_conf='1'" \
-  exp.seed=10 \
-  exp.logging=True
+  exp.seed=8964 \
+  exp.logging=False
 ```
 
 ### Backbones (baselines)
