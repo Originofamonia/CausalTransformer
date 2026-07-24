@@ -44,13 +44,13 @@ class CT(EDCT):
             autoregressive: Flag of including previous outcomes to modelling
             has_vitals: Flag of vitals in dataset
             projection_horizon: Range of tau-step-ahead prediction (tau = projection_horizon + 1)
-            bce_weights: Re-weight BCE if used
+            bce_weights: Re-weight BCE if used; the repo actually uses weighted cross-entropy, not binary cross-entropy
             **kwargs: Other arguments
         """
         super().__init__(args, dataset_collection, autoregressive, has_vitals, bce_weights)
 
         if self.dataset_collection is not None:
-            self.projection_horizon = self.dataset_collection.projection_horizon
+            self.projection_horizon = self.dataset_collection.projection_horizon  # 5
         else:
             self.projection_horizon = projection_horizon
 

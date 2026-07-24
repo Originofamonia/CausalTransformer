@@ -225,9 +225,11 @@ class TransformerMultiInputBlock(nn.Module):
         self.n_inputs = n_inputs
         self.disable_cross_attention = disable_cross_attention
         self.isolate_subnetwork = isolate_subnetwork
+        # self-attention over the previous-treatment sequence, x_t.
         self.self_attention_o = MultiHeadedAttention(num_heads=attn_heads, d_model=hidden, head_size=head_size,
                                                      dropout=attn_dropout, positional_encoding_k=self_positional_encoding_k,
                                                      positional_encoding_v=self_positional_encoding_v, final_layer=final_layer)
+        # self-attention over the previous-outcome sequence, x_o.
         self.self_attention_t = MultiHeadedAttention(num_heads=attn_heads, d_model=hidden, head_size=head_size,
                                                      dropout=attn_dropout, positional_encoding_k=self_positional_encoding_k,
                                                      positional_encoding_v=self_positional_encoding_v, final_layer=final_layer)
@@ -242,6 +244,7 @@ class TransformerMultiInputBlock(nn.Module):
                                                            final_layer=final_layer)
 
         if n_inputs == 3:
+            # for the vitals/covariates stream x_v.
             self.self_attention_v = MultiHeadedAttention(num_heads=attn_heads, d_model=hidden, head_size=head_size,
                                                          dropout=attn_dropout, positional_encoding_k=self_positional_encoding_k,
                                                          positional_encoding_v=self_positional_encoding_v, final_layer=final_layer

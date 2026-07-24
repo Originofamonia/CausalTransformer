@@ -56,7 +56,10 @@ def bce(treatment_pred, current_treatments, mode, weights=None):
 
 
 class BRTreatmentOutcomeHead(nn.Module):
-    """Used by CRN, EDCT, MultiInputTransformer"""
+    """
+    balancing representation
+    Used by CRN, EDCT, MultiInputTransformer
+    """
 
     def __init__(self, seq_hidden_units, br_size, fc_hidden_units, dim_treatments, dim_outcome, alpha=0.0, update_alpha=True,
                  balancing='grad_reverse'):

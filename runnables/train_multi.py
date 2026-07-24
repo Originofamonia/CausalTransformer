@@ -58,7 +58,12 @@ def main(args: DictConfig):
     multimodel = instantiate(args.model.multi, args, dataset_collection, _recursive_=False)
     if args.model.multi.tune_hparams:
         multimodel.finetune(resources_per_trial=args.model.multi.resources_per_trial)
-    accelerator = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        accelerator = "gpu"      # NVIDIA CUDA or AMD ROCm
+    elif torch.backends.mps.is_available():
+        accelerator = "mps"
+    else:
+        accelerator = "cpu"
     multimodel_trainer = Trainer(
         accelerator=accelerator,
         devices=1,
